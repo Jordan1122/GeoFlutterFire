@@ -30,6 +30,26 @@ class GeoFireCollectionRef
     );
   }
 
+  Future<List<DocumentSnapshot<Map<String, dynamic>>>> withinGet({
+    required GeoFirePoint center,
+    required double radius,
+    GetOptions? firestoreOptions,
+    required String field,
+    bool? strictMode,
+  }) {
+    return protectedWithinGet(
+      center: center,
+      radius: radius,
+      firestoreOptions: firestoreOptions,
+      field: field,
+      geopointFrom: (snapData) => geopointFromMap(
+        field: field,
+        snapData: snapData,
+      ),
+      strictMode: strictMode,
+    );
+  }
+
   Stream<List<DistanceDocSnapshot<Map<String, dynamic>>>> withinWithDistance({
     required GeoFirePoint center,
     required double radius,

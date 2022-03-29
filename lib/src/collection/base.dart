@@ -101,6 +101,25 @@ class BaseGeoFireCollectionRef<T> {
       ).map((snapshots) =>
           snapshots.map((snapshot) => snapshot.documentSnapshot).toList());
 
+  @protected
+  Future<List<DocumentSnapshot<T>>> protectedWithinGet({
+    required GeoFirePoint center,
+    required double radius,
+    required String field,
+    GetOptions? firestoreOptions,
+    required GeoPoint? Function(T t) geopointFrom,
+    required bool? strictMode,
+  }) async =>
+      protectedWithinWithDistanceGet(
+        center: center,
+        radius: radius,
+        field: field,
+        firestoreOptions: firestoreOptions,
+        geopointFrom: geopointFrom,
+        strictMode: strictMode,
+      ).then((snapshots) =>
+          snapshots.map((snapshot) => snapshot.documentSnapshot).toList());
+
   /// query firestore documents based on geographic [radius] from geoFirePoint [center]
   /// [field] specifies the name of the key in the document
   @protected
@@ -167,6 +186,79 @@ class BaseGeoFireCollectionRef<T> {
       return filteredList;
     });
     return filtered.asBroadcastStream();
+  }
+
+  /// query firestore documents based on geographic [radius] from geoFirePoint [center]
+  /// [field] specifies the name of the key in the document
+  ///
+  /// This version returns Future not stream and makes caching possible
+  @protected
+  Future<List<DistanceDocSnapshot<T>>> protectedWithinWithDistanceGet({
+    required GeoFirePoint center,
+    required double radius,
+    required String field,
+    GetOptions? firestoreOptions,
+    required GeoPoint? Function(T t) geopointFrom,
+    required bool? strictMode,
+  }) {
+    final nonNullStrictMode = strictMode ?? false;
+
+    final precision = MathUtils.setPrecision(radius);
+    final centerHash = center.hash.substring(0, precision);
+    final area = GeoFirePoint.neighborsOf(hash: centerHash)..add(centerHash);
+
+    final Iterable<Future<QuerySnapshot<T>>> queries =
+        area.map((hash) => _queryPoint(hash, field).get(firestoreOptions));
+
+    final Iterable<Future<List<QueryDocumentSnapshot<T>>>> a =
+        queries.map((e) => e.then((value) => value.docs));
+
+    final b = Future.wait(a);
+
+    final Future<List<QueryDocumentSnapshot<T>>> merged =
+        b.then((value) => value.expand((element) => element).toList());
+
+    final filtered = merged.then((list) {
+      final mappedList = list.map((documentSnapshot) {
+        final snapData =
+            documentSnapshot.exists ? documentSnapshot.data() : null;
+
+        assert(snapData != null, 'Data in one of the docs is empty');
+        if (snapData == null) return null;
+        // We will handle it to fail gracefully
+
+        final geoPoint = geopointFrom(snapData);
+        assert(geoPoint != null, 'Couldnt find geopoint from stored data');
+        if (geoPoint == null) return null;
+        // We will handle it to fail gracefully
+
+        final kmDistance = center.kmDistance(
+          lat: geoPoint.latitude,
+          lng: geoPoint.longitude,
+        );
+        return DistanceDocSnapshot(
+          documentSnapshot: documentSnapshot,
+          kmDistance: kmDistance,
+        );
+      });
+
+      final nullableFilteredList = nonNullStrictMode
+          ? mappedList
+              .where((doc) =>
+                      doc != null &&
+                      doc.kmDistance <=
+                          radius * 1.02 // buffer for edge distances;
+                  )
+              .toList()
+          : mappedList.toList();
+      final filteredList = nullableFilteredList.whereNotNull().toList();
+
+      filteredList.sort(
+        (a, b) => (a.kmDistance * 1000).toInt() - (b.kmDistance * 1000).toInt(),
+      );
+      return filteredList;
+    });
+    return filtered;
   }
 
   Stream<List<QueryDocumentSnapshot<T>>> mergeObservable(
